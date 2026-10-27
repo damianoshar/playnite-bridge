@@ -167,6 +167,13 @@ Fetch missing artwork (Steam CDN + IGDB fallback).
 
 List games missing artwork.
 
+### GET /api/games/{id}/cover
+
+Cover image bytes. `?type=cover` (default), `?type=icon` or `?type=background`.
+`?width=` requests a server-side thumbnail (e.g. `?width=256`, clamped
+32–1024, JPEG quality 80; GIF/ICO/TGA always serve the original). Responses
+carry a strong `ETag` — send it back as `If-None-Match` for `304 Not Modified`.
+
 ---
 
 ## Database Collections

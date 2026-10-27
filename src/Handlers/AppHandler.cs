@@ -6,16 +6,19 @@ namespace PlayniteBridge.Handlers
     using Playnite.SDK;
     using Playnite.SDK.Models;
     using PlayniteBridge.Server;
+    using PlayniteBridge.Services;
 
     internal class AppHandler
     {
         private readonly IPlayniteAPI _api;
         private readonly int _httpPort;
+        private readonly SdkGate _sdk;
 
-        public AppHandler(IPlayniteAPI api, int httpPort)
+        public AppHandler(IPlayniteAPI api, int httpPort, SdkGate sdk = null)
         {
             _api = api;
             _httpPort = httpPort;
+            _sdk = sdk;
         }
 
         public object GetAppInfo()
@@ -47,11 +50,25 @@ namespace PlayniteBridge.Handlers
 
         public object GetStats()
         {
-            var games = _api.Database.Games;
-            if (games == null || games.Count == 0)
-                return new { totalGames = 0 };
+            List<Game> gameList;
+            if (_sdk != null)
+            {
+                try { gameList = _sdk.Read(() => _api.Database.Games.ToList()); }
+                catch { return StatsFor(_api.Database.Games); }
+            }
+            else
+            {
+                return StatsFor(_api.Database.Games);
+            }
+            return StatsFor(gameList);
+        }
 
+        private static object StatsFor(IEnumerable<Game> games)
+        {
+            if (games == null) return new { totalGames = 0 };
             var gameList = games.ToList();
+            if (gameList.Count == 0)
+                return new { totalGames = 0 };
             return new
             {
                 totalGames = gameList.Count,

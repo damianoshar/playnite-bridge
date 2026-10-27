@@ -1,6 +1,7 @@
 namespace PlayniteBridge.Server
 {
     using System;
+    using System.IO;
     using System.Net;
     using System.Text;
     using System.Threading;
@@ -18,14 +19,18 @@ namespace PlayniteBridge.Server
         private readonly int _port;
         private readonly AuthHandler _auth;
         private readonly Router _router;
+        private readonly RequestGate _gate;
 
         public bool IsNetworkBound { get; private set; }
 
-        public HttpApiServer(int port, AuthHandler auth, Router router)
+        public HttpApiServer(int port, AuthHandler auth, Router router, RequestGate gate = null)
         {
             _port = port;
             _auth = auth;
             _router = router;
+            // The gate is owned by the caller (the plugin disposes it).
+            // A default instance lives for the process lifetime.
+            _gate = gate ?? new RequestGate();
         }
 
         public void Start()
@@ -116,7 +121,9 @@ namespace PlayniteBridge.Server
                 }
 
                 var requestContext = RequestContext.FromHttpRequest(req);
-                var result = _router.Route(requestContext);
+                // Bounded + de-duplicated: identical concurrent GETs share one
+                // execution instead of stampeding the Playnite process.
+                var result = _gate.Execute(requestContext, () => _router.Route(requestContext));
 
                 if (result == null)
                 {
@@ -126,25 +133,82 @@ namespace PlayniteBridge.Server
 
                 if (result is ImageResult img)
                 {
-                    res.ContentType = img.ContentType;
-                    res.ContentLength64 = img.Data.Length;
-                    res.Headers.Add("Cache-Control", "public, max-age=86400");
-                    res.OutputStream.Write(img.Data, 0, img.Data.Length);
+                    WriteImage(req, res, img);
                 }
                 else
                 {
                     WriteJson(res, result);
                 }
             }
+            catch (Exception ex) when (IsClientDisconnect(ex))
+            {
+                // The phone went away mid-request (scroll cancels, network
+                // drops). Expected traffic noise — never an error, and never
+                // allowed to become an unhandled ThreadPool exception.
+                Logger.Debug($"Client disconnected during {req.HttpMethod} {req.RawUrl}: {ex.Message}");
+            }
             catch (Exception ex)
             {
                 Logger.Error(ex, $"HTTP request error: {req.RawUrl}");
-                res.StatusCode = 500;
-                WriteJson(res, new { error = ex.Message });
+                // Guarded: if the client is already gone, writing the 500 must
+                // not throw out of this handler (that path previously escaped
+                // to AppDomain-unhandled and took Playnite down with it).
+                TryWriteError(res, ex);
             }
             finally
             {
                 try { res.OutputStream.Close(); } catch { }
+            }
+        }
+
+        private static void WriteImage(HttpListenerRequest req, HttpListenerResponse res, ImageResult img)
+        {
+            var inm = req.Headers["If-None-Match"];
+            if (!string.IsNullOrEmpty(img.ETag) && ETagMatches(inm, img.ETag))
+            {
+                res.StatusCode = 304;
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(img.ETag))
+                res.Headers.Add("ETag", img.ETag);
+            res.ContentType = img.ContentType;
+            res.ContentLength64 = img.Data.Length;
+            res.Headers.Add("Cache-Control", "public, max-age=86400");
+            res.OutputStream.Write(img.Data, 0, img.Data.Length);
+        }
+
+        private static bool ETagMatches(string ifNoneMatch, string etag)
+        {
+            if (string.IsNullOrEmpty(ifNoneMatch)) return false;
+            var want = etag.Trim().Trim('"');
+            foreach (var part in ifNoneMatch.Split(','))
+            {
+                var candidate = part.Trim();
+                if (candidate == "*") return true;
+                if (candidate.StartsWith("W/")) candidate = candidate.Substring(2).Trim();
+                if (string.Equals(candidate.Trim('"'), want, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        private static bool IsClientDisconnect(Exception ex)
+        {
+            return ex is HttpListenerException
+                || ex is ObjectDisposedException
+                || ex is IOException;
+        }
+
+        private void TryWriteError(HttpListenerResponse res, Exception ex)
+        {
+            try
+            {
+                res.StatusCode = 500;
+                WriteJson(res, new { error = ex.Message });
+            }
+            catch (Exception inner)
+            {
+                Logger.Debug("Failed to write error response: " + inner.Message);
             }
         }
 

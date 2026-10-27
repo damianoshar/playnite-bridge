@@ -16,17 +16,34 @@ namespace PlayniteBridge.Handlers
         private readonly IPlayniteAPI _api;
         private readonly CollectionResolver _resolver;
         private readonly GameSerializationService _serializer;
+        private readonly SdkGate _sdk;
+        private readonly CoverService _covers;
 
-        public GamesHandler(IPlayniteAPI api, CollectionResolver resolver, GameSerializationService serializer)
+        public GamesHandler(IPlayniteAPI api, CollectionResolver resolver, GameSerializationService serializer, SdkGate sdk = null, CoverService covers = null)
         {
             _api = api;
             _resolver = resolver;
             _serializer = serializer;
+            _sdk = sdk;
+            try { _covers = covers ?? new CoverService(api); }
+            catch { _covers = null; }
+        }
+
+        private IEnumerable<Game> ReadGames()
+        {
+            // Serialized SDK reads; falls back to a live enumeration if the
+            // gate is unavailable (e.g. unit tests with mocked databases).
+            if (_sdk != null)
+            {
+                try { return _sdk.Read(() => _api.Database.Games.ToList()); }
+                catch { }
+            }
+            return _api.Database.Games;
         }
 
         public object GetGames(RequestContext ctx)
         {
-            IEnumerable<Game> games = _api.Database.Games;
+            IEnumerable<Game> games = ReadGames();
 
             var q = ctx.QueryString?["q"];
             if (!string.IsNullOrEmpty(q))
@@ -379,7 +396,7 @@ namespace PlayniteBridge.Handlers
         public object GetMissingArt()
         {
             var results = new List<object>();
-            foreach (var g in _api.Database.Games.OrderBy(x => x.Name))
+            foreach (var g in ReadGames().OrderBy(x => x.Name))
             {
                 var mi = string.IsNullOrEmpty(g.Icon);
                 var mc = string.IsNullOrEmpty(g.CoverImage);
@@ -403,6 +420,20 @@ namespace PlayniteBridge.Handlers
 
         public object GetCover(Guid gameId, string type = "cover")
         {
+            return GetCover(gameId, type, null);
+        }
+
+        public object GetCover(Guid gameId, string type, int? maxWidth)
+        {
+            if (_covers != null)
+            {
+                int statusCode;
+                string errorMessage;
+                var image = _covers.GetCoverImage(gameId, type ?? "cover", maxWidth, out statusCode, out errorMessage);
+                if (image == null) return Error(statusCode, errorMessage);
+                return image;
+            }
+
             var game = _api.Database.Games.Get(gameId);
             if (game == null) return Error(404, "Game not found");
 

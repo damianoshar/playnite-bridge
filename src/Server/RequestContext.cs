@@ -10,6 +10,7 @@ namespace PlayniteBridge.Server
     {
         public string Path { get; set; }
         public string Method { get; set; }
+        public string RawUrl { get; set; }
         public NameValueCollection QueryString { get; set; }
         public string RawBody { get; set; }
 
@@ -41,6 +42,7 @@ namespace PlayniteBridge.Server
             {
                 Path = req.Url.AbsolutePath.TrimEnd('/').ToLower(),
                 Method = req.HttpMethod.ToUpper(),
+                RawUrl = req.RawUrl,
                 QueryString = req.QueryString,
                 RawBody = rawBody
             };

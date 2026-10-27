@@ -14,18 +14,29 @@ namespace PlayniteBridge.Handlers
         private readonly IPlayniteAPI _api;
         private readonly GameQueryService _queryService;
         private readonly GameSerializationService _serializer;
+        private readonly SdkGate _sdk;
 
-        public QueryHandler(IPlayniteAPI api, GameQueryService queryService, GameSerializationService serializer)
+        public QueryHandler(IPlayniteAPI api, GameQueryService queryService, GameSerializationService serializer, SdkGate sdk = null)
         {
             _api = api;
             _queryService = queryService;
             _serializer = serializer;
+            _sdk = sdk;
         }
 
         public object QueryGames(RequestContext ctx)
         {
             var body = ctx.Body;
-            IEnumerable<Game> games = _api.Database.Games;
+            IEnumerable<Game> games;
+            if (_sdk != null)
+            {
+                try { games = _sdk.Read(() => _api.Database.Games.ToList()); }
+                catch { games = _api.Database.Games; }
+            }
+            else
+            {
+                games = _api.Database.Games;
+            }
 
             // Apply filters via service
             games = _queryService.Filter(games, body);

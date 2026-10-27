@@ -25,6 +25,9 @@ namespace PlayniteBridge
         private AuthHandler _auth;
         private AutomationHandler _automation;
         private PluginSettingsViewModel _settingsViewModel;
+        private RequestGate _gate;
+        private SdkGate _sdkGate;
+        private CoverService _covers;
 
         // Sync
         private SyncEngine _syncEngine;
@@ -48,6 +51,9 @@ namespace PlayniteBridge
             // Services
             _resolver = new CollectionResolver();
             _serializer = new GameSerializationService();
+            // Hardened request pipeline: serialized SDK reads, cached covers.
+            _sdkGate = new SdkGate();
+            _covers = new CoverService(PlayniteApi);
             var queryService = new GameQueryService();
             var evalService = new EvalService();
             var jsonHelper = new JsonHelper();
@@ -61,11 +67,11 @@ namespace PlayniteBridge
             _auth.LoadOrCreateToken();
 
             // Handlers
-            var gamesHandler = new GamesHandler(PlayniteApi, _resolver, _serializer);
-            var queryHandler = new QueryHandler(PlayniteApi, queryService, _serializer);
+            var gamesHandler = new GamesHandler(PlayniteApi, _resolver, _serializer, _sdkGate, _covers);
+            var queryHandler = new QueryHandler(PlayniteApi, queryService, _serializer, _sdkGate);
             var collectionHandler = new CollectionHandler(PlayniteApi, _resolver);
             var viewHandler = new ViewHandler(PlayniteApi, _serializer);
-            var appHandler = new AppHandler(PlayniteApi, HttpPort);
+            var appHandler = new AppHandler(PlayniteApi, HttpPort, _sdkGate);
             _automation = new AutomationHandler(PlayniteApi, _resolver, () => GetPluginUserDataPath());
             var pluginDataHandler = new PluginDataHandler(PlayniteApi, pluginService);
             var evalHandler = new EvalHandler(PlayniteApi, this, evalService, jsonHelper, _serializer);
@@ -73,7 +79,8 @@ namespace PlayniteBridge
             // Router + Server
             var router = new Router(PlayniteApi, gamesHandler, queryHandler, collectionHandler,
                 viewHandler, appHandler, _automation, _auth, pluginDataHandler, evalHandler);
-            _server = new HttpApiServer(HttpPort, _auth, router);
+            _gate = new RequestGate(maxConcurrent: 12);
+            _server = new HttpApiServer(HttpPort, _auth, router, _gate);
             _server.Start();
 
             Logger.Info($"Playnite Bridge API started on port {HttpPort}");
@@ -139,6 +146,7 @@ namespace PlayniteBridge
             if (PlayniteApi?.Database?.Games != null)
                 PlayniteApi.Database.Games.ItemUpdated -= OnGameUpdated;
             _server?.Stop();
+            try { _gate?.Dispose(); } catch { }
             base.Dispose();
         }
 
