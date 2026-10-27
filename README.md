@@ -1,5 +1,8 @@
 # Playnite Bridge
 
+> **Source/derivation:** Adapted from [rollacode/playnite-bridge](https://github.com/rollacode/playnite-bridge) (MIT `2026 rollacode`; license retained in this repository).  
+> **Version:** 1.6.0 hardened (drop-in replacement for upstream 1.5.3).
+
 A [Playnite](https://playnite.link/) plugin with REST API, cross-PC game library sync, and Xbox button integration for handhelds.
 
 - **REST API** — 50+ endpoints for AI agents and automation
